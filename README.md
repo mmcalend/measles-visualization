@@ -25,18 +25,3 @@ Choropleth map colored by state MMR coverage rates with bubble overlay sized by 
 ### 5. Lives Saved Analysis (1975-2024)
 Annual estimates of deaths prevented by measles vaccination using WHO EPI50 mathematical models. Theoretical projections comparing vaccine vs no-vaccine scenarios, not observed mortality data.
 
-## Data Sources
-
-**CDC Measles Case Data**  
-`https://www.cdc.gov/wcms/vizdata/measles/MeaslesCasesYear.json`  
-`https://www.cdc.gov/wcms/vizdata/measles/MeaslesCasesMap.json`
-
-**CDC Vaccination Coverage**  
-National Immunization Survey (NIS) - Kindergarten coverage by state
-
-**WHO EPI50 Vaccine Impact Models**  
-`https://github.com/WorldHealthOrganization/epi50-vaccine-impact`  
-Published in The Lancet, mathematical projections only
-
-**R₀ Reference Sources**  
-University of Michigan School of Public Health, Journal of Theoretical Biology, PNAS, Liu & Rocklöv 2022
