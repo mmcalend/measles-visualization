@@ -1,0 +1,332 @@
+name: Update Measles Data Visualizations with Backup
+on:
+  schedule:
+    # Run daily at 6 AM UTC (1 AM EST, 11 PM PST previous day)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Allow manual triggering
+  push:
+    branches: [ main ]
+    paths: 
+      - 'src/**'
+      - 'data/**'
+
+# Prevent concurrent runs that cause conflicts
+concurrency:
+  group: update-visualizations
+  cancel-in-progress: true
+
+jobs:
+  update-visualizations:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Reset to latest main
+      run: |
+        git fetch origin main
+        git reset --hard origin/main
+        git clean -fd
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Create required directories
+      run: |
+        mkdir -p data/backups
+        mkdir -p docs
+        
+    - name: Create missing local data files if needed
+      run: |
+        # Create placeholder files if they don't exist
+        if [ ! -f "data/timeline.csv" ]; then
+          echo "Year,Cases,Highlight" > data/timeline.csv
+          echo "1960,441703,Pre-vaccine era: ~440k cases annually" >> data/timeline.csv
+          echo "1963,385156,First measles vaccine licensed" >> data/timeline.csv
+          echo "1968,22231,Vaccine implementation reduces cases" >> data/timeline.csv
+          echo "2000,86,Measles declared eliminated in US" >> data/timeline.csv
+          echo "2008,140,Largest outbreak since elimination (Arizona cluster)" >> data/timeline.csv
+          echo "2016,70,Arizona daycare outbreak" >> data/timeline.csv
+          echo "2019,1282,Largest outbreak in 25+ years" >> data/timeline.csv
+          echo "Created placeholder timeline.csv"
+        fi
+        
+        if [ ! -f "data/MMRKCoverage.csv" ]; then
+          echo "year,Location,MMR" > data/MMRKCoverage.csv
+          echo "2015,United States,94.7" >> data/MMRKCoverage.csv
+          echo "2016,United States,94.0" >> data/MMRKCoverage.csv
+          echo "2017,United States,94.3" >> data/MMRKCoverage.csv
+          echo "2018,United States,94.7" >> data/MMRKCoverage.csv
+          echo "2019,United States,95.1" >> data/MMRKCoverage.csv
+          echo "2020,United States,95.1" >> data/MMRKCoverage.csv
+          echo "2021,United States,93.6" >> data/MMRKCoverage.csv
+          echo "2022,United States,92.7" >> data/MMRKCoverage.csv
+          echo "2023,United States,93.1" >> data/MMRKCoverage.csv
+          echo "2024,United States,92.9" >> data/MMRKCoverage.csv
+          echo "Created placeholder MMRKCoverage.csv"
+        fi
+        
+        if [ ! -f "data/MMRKCoverage25.csv" ]; then
+          echo "geography,Estimate (%)" > data/MMRKCoverage25.csv
+          echo "Alabama,94.2" >> data/MMRKCoverage25.csv
+          echo "Alaska,92.1" >> data/MMRKCoverage25.csv
+          echo "Arizona,93.8" >> data/MMRKCoverage25.csv
+          echo "Created placeholder MMRKCoverage25.csv"
+        fi
+        
+    - name: Backup external data sources
+      run: |
+        echo "Creating backups of external data sources..."
+        python -c "
+        import os
+        import requests
+        import pandas as pd
+        from datetime import datetime
+        from pathlib import Path
+        import json
+        import shutil
+        
+        def create_backup(url, name):
+            backup_dir = Path('data/backups')
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            try:
+                print(f'Backing up {name} from {url}')
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                
+                # Determine file extension
+                if '.json' in url or 'json' in response.headers.get('content-type', ''):
+                    ext = '.json'
+                    # Validate JSON
+                    data = response.json()
+                elif '.csv' in url:
+                    ext = '.csv'
+                    # Quick validation
+                    pd.read_csv(url, nrows=5)
+                else:
+                    ext = '.txt'
+                
+                backup_file = backup_dir / f'{name}_{timestamp}{ext}'
+                latest_file = backup_dir / f'{name}_latest{ext}'
+                
+                with open(backup_file, 'wb') as f:
+                    f.write(response.content)
+                
+                # Create latest file
+                shutil.copy2(backup_file, latest_file)
+                print(f'✓ Saved: {backup_file}')
+                print(f'✓ Latest: {latest_file}')
+                return True
+                
+            except Exception as e:
+                print(f'ERROR backing up {name}: {e}')
+                return False
+        
+        sources = {
+            'cdc_measles_cases': 'https://www.cdc.gov/wcms/vizdata/measles/MeaslesCasesYear.json',
+            'cdc_measles_map': 'https://www.cdc.gov/wcms/vizdata/measles/MeaslesCasesMap.json',
+            'who_vaccine_impact': 'https://raw.githubusercontent.com/WorldHealthOrganization/epi50-vaccine-impact/refs/tags/v1.0/extern/raw/epi50_measles_vaccine.csv',
+            'who_no_vaccine': 'https://raw.githubusercontent.com/WorldHealthOrganization/epi50-vaccine-impact/refs/tags/v1.0/extern/raw/epi50_measles_no_vaccine.csv'
+        }
+        
+        successful = 0
+        failed_sources = []
+        for name, url in sources.items():
+            if create_backup(url, name):
+                successful += 1
+            else:
+                failed_sources.append(name)
+        
+        # Create backup log
+        log_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'total_sources': len(sources),
+            'successful_backups': successful,
+            'failed_sources': failed_sources,
+            'sources': list(sources.keys())
+        }
+        
+        log_file = Path('data/backups/backup_log.json')
+        logs = []
+        if log_file.exists():
+            try:
+                with open(log_file, 'r') as f:
+                    logs = json.load(f)
+            except:
+                logs = []
+        
+        logs.append(log_entry)
+        logs = logs[-30:]  # Keep last 30 entries
+        
+        with open(log_file, 'w') as f:
+            json.dump(logs, f, indent=2)
+        
+        print(f'Backup completed: {successful}/{len(sources)} sources successful')
+        
+        # Fail the step if no backups succeeded
+        if successful == 0:
+            print('ERROR: All backup attempts failed!')
+            exit(1)
+        "
+        
+    - name: Clean docs directory
+      run: |
+        # Remove existing docs to avoid conflicts
+        rm -rf docs/
+        mkdir -p docs
+        
+    - name: Generate visualizations with backup fallback
+      run: |
+        echo "Current directory contents:"
+        ls -la
+        echo "Data directory contents:"
+        ls -la data/ || echo "No data directory found"
+        echo "Backup directory contents:"
+        ls -la data/backups/ || echo "No backups directory found"
+        echo "Running visualization generator with backup support..."
+        
+        # Run the visualization script
+        python src/generate_visualizations.py
+        
+        echo "Post-generation directory contents:"
+        ls -la
+        echo "Docs directory contents:"
+        if [ -d "docs" ]; then
+          ls -la docs/
+          echo "Number of HTML files created: $(find docs -name "*.html" 2>/dev/null | wc -l)"
+        else
+          echo "⚠ No docs directory found after generation"
+          mkdir -p docs
+          echo "<h1>Visualization Generation Failed</h1><p>Check workflow logs for details.</p>" > docs/index.html
+        fi
+        
+    - name: Cleanup old backups
+      run: |
+        python -c "
+        import os
+        from pathlib import Path
+        from datetime import datetime
+        
+        backup_dir = Path('data/backups')
+        if backup_dir.exists():
+            cutoff_time = datetime.now().timestamp() - (7 * 24 * 60 * 60)  # 7 days instead of 30
+            removed = 0
+            
+            for file in backup_dir.glob('*_[0-9]*'):
+                if (file.stat().st_mtime < cutoff_time and 
+                    not file.name.endswith('_latest.json') and 
+                    not file.name.endswith('_latest.csv') and
+                    not file.name == 'backup_log.json'):
+                    try:
+                        file.unlink()
+                        removed += 1
+                        print(f'Removed old backup: {file.name}')
+                    except Exception as e:
+                        print(f'Error removing {file.name}: {e}')
+            
+            if removed > 0:
+                print(f'Cleaned up {removed} old backup files')
+            else:
+                print('No old backup files to clean up')
+        "
+        
+    - name: Check for changes and verify files exist
+      id: verify-changed-files
+      run: |
+        echo "Checking for changes..."
+        git status --porcelain
+        
+        # Check if docs directory has files
+        if [ -d "docs" ] && [ "$(ls -A docs)" ]; then
+          echo "docs_exist=true" >> $GITHUB_OUTPUT
+          echo "✓ Docs directory has files"
+          echo "Files in docs: $(ls docs/)"
+        else
+          echo "docs_exist=false" >> $GITHUB_OUTPUT
+          echo "⚠ Docs directory is empty or missing"
+        fi
+        
+        # Check if backups directory has files
+        if [ -d "data/backups" ] && [ "$(ls -A data/backups)" ]; then
+          echo "backups_exist=true" >> $GITHUB_OUTPUT
+          echo "✓ Backups directory has files"
+          echo "Files in backups: $(ls data/backups/)"
+        else
+          echo "backups_exist=false" >> $GITHUB_OUTPUT
+          echo "⚠ Backups directory is empty or missing"
+        fi
+        
+        # Check for any changes
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "✓ Changes detected"
+        else
+          echo "changed=false" >> $GITHUB_OUTPUT
+          echo "ℹ No changes detected"
+        fi
+        
+    - name: Commit and push changes
+      if: steps.verify-changed-files.outputs.changed == 'true'
+      uses: stefanzweifel/git-auto-commit-action@v4
+      with:
+        commit_message: 'Auto-update visualizations and backups - ${{ github.run_id }}'
+        branch: main
+        file_pattern: '.'
+        commit_options: '--no-verify'
+        repository: .
+        commit_user_name: GitHub Action
+        commit_user_email: action@github.com
+        skip_fetch: false
+        skip_checkout: false
+        create_branch: false
+        
+    - name: Deploy to GitHub Pages
+      if: steps.verify-changed-files.outputs.docs_exist == 'true'
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./docs
+        publish_branch: gh-pages
+        force_orphan: true
+        
+    - name: Create deployment summary
+      run: |
+        echo "## Visualization Update Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Timestamp:** $(date '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status:** Workflow completed" >> $GITHUB_STEP_SUMMARY
+        echo "- **Docs Created:** ${{ steps.verify-changed-files.outputs.docs_exist }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Backups Created:** ${{ steps.verify-changed-files.outputs.backups_exist }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Backup Status" >> $GITHUB_STEP_SUMMARY
+        if [ -f "data/backups/backup_log.json" ]; then
+          echo "- **Latest Backup:** $(python -c "import json; log=json.load(open('data/backups/backup_log.json')); print(f\"{log[-1]['successful_backups']}/{log[-1]['total_sources']} sources successful\")")" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Live Visualizations" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.verify-changed-files.outputs.docs_exist }}" == "true" ]; then
+          echo "Visit: https://$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]' | sed 's/\//.github.io\//')" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "⚠ No visualizations were generated - check logs above" >> $GITHUB_STEP_SUMMARY
+        fi
