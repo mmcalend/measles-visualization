@@ -234,5 +234,17 @@
       "who_vaccine_impact",
       "who_no_vaccine"
     ]
+  },
+  {
+    "timestamp": "2025-09-12T06:19:25.173488",
+    "total_sources": 4,
+    "successful_backups": 4,
+    "failed_sources": [],
+    "sources": [
+      "cdc_measles_cases",
+      "cdc_measles_map",
+      "who_vaccine_impact",
+      "who_no_vaccine"
+    ]
   }
 ]
